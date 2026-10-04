@@ -1,0 +1,1326 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="傾いた映像や、ゆらゆら揺れるダッチアングルの動画を水平に戻し、手ぶれも抑えるブラウザ用ツール。処理はすべて端末内で行います。">
+<title>水平リセット</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: dark video stage on the left, a spirit-level control rail on the right; stacks on phones. */
+:root {
+  --bg: #ECEEF1;
+  --panel: #FFFFFF;
+  --ink: #15181C;
+  --muted: #5A636E;
+  --line: #D2D7DD;
+  --accent: #C98200;
+  --accent-soft: #F6E7C6;
+  --on-accent: #1C1300;
+  --stage: #0D0F12;
+  --vial: #F3EBD6;
+  --danger: #B3261E;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111316; --panel: #1A1D21; --ink: #E8EBEE; --muted: #9AA3AD; --line: #2B3036;
+    --accent: #F0B23A; --accent-soft: #3A2E14; --on-accent: #1C1300; --stage: #07080A; --vial: #2A2516; --danger: #F2847C;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111316; --panel: #1A1D21; --ink: #E8EBEE; --muted: #9AA3AD; --line: #2B3036;
+  --accent: #F0B23A; --accent-soft: #3A2E14; --on-accent: #1C1300; --stage: #07080A; --vial: #2A2516; --danger: #F2847C;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 20px; }
+h1 { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: .02em; text-wrap: balance; }
+h1 span { color: var(--accent); }
+.lede { margin: 0; color: var(--muted); font-size: .9rem; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+
+/* Stage */
+.stage { background: var(--stage); border-radius: 10px; padding: 14px; display: grid; gap: 12px; min-width: 0; position: relative; }
+.frame-area { display: grid; place-items: center; min-height: 200px; }
+.frame { position: relative; width: 100%; max-width: 100%; }
+.frame video { position: absolute; inset: 0; width: 100%; height: 100%; }
+.frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#out { background: #000; }
+#overlay { pointer-events: none; }
+.badge { position: absolute; top: 10px; left: 10px; font-family: var(--font-num); font-size: 12px; padding: 3px 8px; border-radius: 4px; background: rgba(0,0,0,.6); color: #F5F5F5; pointer-events: none; }
+.badge.orig { background: var(--accent); color: var(--on-accent); }
+.drop-hint { position: absolute; inset: 0; display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: 10px; background: rgba(0,0,0,.65); color: #fff; font-weight: 700; font-size: 1.1rem; }
+
+.transport { display: flex; align-items: center; gap: 10px; color: #D9DDE2; font-family: var(--font-num); font-size: 12px; }
+.transport input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.tbtn { background: #22262B; color: #ECEFF2; border: 1px solid #343A41; border-radius: 6px; padding: 6px 10px; font: 500 13px var(--font-body); cursor: pointer; white-space: nowrap; }
+.tbtn:hover { border-color: var(--accent); }
+.tbtn:disabled { opacity: .45; cursor: default; }
+.stage-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Panel */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: grid; min-width: 0; }
+.sec { padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.sec + .sec { border-top: 1px solid var(--line); }
+.label { font-size: 11px; letter-spacing: .12em; color: var(--muted); font-weight: 700; }
+.row-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.row-label .val { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+
+.readout { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.deg { font-family: var(--font-num); font-size: 2.4rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.deg small { font-size: 1rem; color: var(--muted); }
+.dir { font-size: .8rem; color: var(--muted); text-align: right; }
+
+.vial { position: relative; height: 30px; border-radius: 15px; background: var(--vial); border: 1px solid var(--line); overflow: hidden; }
+.vial .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .35; }
+.vial .tick.zero { opacity: 1; width: 2px; background: var(--ink); }
+.vial .bubble { position: absolute; top: 4px; height: 20px; width: 34px; margin-left: -17px; border-radius: 10px; background: radial-gradient(ellipse at 40% 30%, #fff 0 18%, var(--accent) 60%); box-shadow: 0 0 0 1px rgba(0,0,0,.15); }
+.scale { display: flex; justify-content: space-between; font-family: var(--font-num); font-size: 10px; color: var(--muted); }
+
+input[type=range].wide-range { width: 100%; accent-color: var(--accent); }
+.steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 7px 6px; font: 500 13px var(--font-body); cursor: pointer; }
+.btn.num { font-family: var(--font-num); font-size: 12px; }
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, .tbtn:focus-visible, .seg label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+.btn.wide { width: 100%; padding: 10px; font-size: 14px; }
+.status { font-size: .82rem; color: var(--muted); min-height: 1.3em; }
+.status.warn { color: var(--danger); }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg label { text-align: center; padding: 7px 4px; font-size: 13px; cursor: pointer; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--accent-soft); color: var(--ink); font-weight: 700; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.check input { accent-color: var(--accent); }
+.zoomnote { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+
+.graph-wrap { display: grid; gap: 4px; }
+#graph { width: 100%; height: 96px; display: block; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; touch-action: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+.legend .raw { background: var(--muted); opacity: .6; }
+.legend .smooth { background: var(--accent); }
+
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.progress div { height: 100%; width: 0; background: var(--accent); }
+.result { display: grid; gap: 8px; }
+.result video { width: 100%; border-radius: 6px; background: #000; }
+.hidden-video { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; left: 0; top: 0; }
+.tip { margin: 0; font-size: .82rem; line-height: 1.7; padding: 10px 12px; border-radius: 6px; background: var(--accent-soft); color: var(--ink); }
+.tip b { font-weight: 700; }
+.keys { font-size: .78rem; color: var(--muted); margin: 0; }
+kbd { font-family: var(--font-num); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; }
+</style>
+<style>body { margin: 0; } img { max-width: 100%; }</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>水平<span>リセット</span></h1>
+    <p class="lede">傾いた映像や、ゆらゆら揺れる映像の水平を保ち、手ぶれも抑えます。処理はすべてブラウザ内で行われます。</p>
+  </header>
+
+  <div class="main">
+    <section class="stage" id="stage" aria-label="プレビュー">
+      <div class="frame-area">
+        <div class="frame" id="frame">
+          <video id="video" playsinline preload="auto"></video>
+          <canvas id="out"></canvas>
+          <canvas id="overlay"></canvas>
+          <span class="badge" id="badge">サンプル映像</span>
+        </div>
+      </div>
+      <div class="transport">
+        <button class="tbtn" id="play" type="button">再生</button>
+        <input type="range" id="seek" min="0" max="1000" value="0" aria-label="再生位置">
+        <span id="time">0:00 / 0:00</span>
+      </div>
+      <div class="stage-row">
+        <button class="tbtn" id="open" type="button">動画を開く</button>
+        <button class="tbtn" id="compare" type="button" title="押している間、元の映像を表示">長押しで元の映像</button>
+        <button class="tbtn" id="mute" type="button">音声オン</button>
+      </div>
+      <input type="file" id="file" accept="video/*" hidden>
+      <div class="drop-hint" id="dropHint" hidden>ここに動画をドロップ</div>
+    </section>
+
+    <aside class="panel">
+      <div class="sec">
+        <div class="label">補正モード</div>
+        <div class="seg" role="radiogroup" aria-label="補正モード">
+          <label><input type="radio" name="mode" id="modeFixed" value="fixed">一定の傾き</label>
+          <label><input type="radio" name="mode" id="modeTrack" value="track" checked>揺れに追従</label>
+        </div>
+
+        <div class="readout">
+          <div class="deg" id="deg">0.0<small>°</small></div>
+          <div class="dir" id="dir">回転なし</div>
+        </div>
+        <div class="vial" id="vial" aria-hidden="true"><div class="bubble" id="bubble"></div></div>
+        <div class="scale"><span>−45°</span><span>−20°</span><span>0</span><span>+20°</span><span>+45°</span></div>
+
+        <!-- Tracking mode -->
+        <div id="trackBox" class="graph-wrap">
+          <div class="row-label"><span class="label">傾きの推移</span><span class="val" id="graphRange"></span></div>
+          <canvas id="graph" aria-label="時間ごとの傾きのグラフ。クリックでその位置へ移動"></canvas>
+          <div class="legend"><span><i class="raw"></i>水平線の検出値</span><span><i class="smooth"></i>補正する角度</span></div>
+          <label class="check"><input type="checkbox" id="posStab" checked>位置のブレ（手ぶれ）も補正する</label>
+          <p class="keys" style="margin:0">強くするほど、ゆっくりした動きまで止めます（その分ズームが大きくなります）。</p>
+          <div class="row-label"><label class="label" for="smooth">ブレ補正の強さ</label><span class="val" id="smoothVal"></span></div>
+          <input type="range" class="wide-range" id="smooth" min="0" max="100" step="1" value="40">
+          <button class="btn primary wide" type="button" id="analyze">揺れを解析する</button>
+          <div class="progress" id="anaProgWrap" hidden><div id="anaProg"></div></div>
+        </div>
+
+        <!-- Shared angle slider: absolute angle (fixed) or fine offset (tracking) -->
+        <div class="row-label"><label class="label" for="angle" id="angleLabel">補正角</label><span class="val" id="angleVal">0.0°</span></div>
+        <input type="range" class="wide-range" id="angle" min="-45" max="45" step="0.1" value="0">
+        <div class="steps">
+          <button class="btn num" type="button" data-step="-1">−1°</button>
+          <button class="btn num" type="button" data-step="-0.1">−0.1</button>
+          <button class="btn num" type="button" id="zero">0</button>
+          <button class="btn num" type="button" data-step="0.1">+0.1</button>
+          <button class="btn num" type="button" data-step="1">+1°</button>
+        </div>
+        <button class="btn primary wide" type="button" id="auto">自動で水平を検出</button>
+        <div class="status" id="autoStatus"></div>
+      </div>
+
+      <div class="sec">
+        <div class="label">フレームの扱い</div>
+        <div class="seg" role="radiogroup" aria-label="フレームの扱い">
+          <label><input type="radio" name="fit" id="fitFill" value="fill" checked>ズームして埋める</label>
+          <label><input type="radio" name="fit" id="fitKeep" value="keep">全体を残す</label>
+        </div>
+        <div class="zoomnote" id="zoomNote">ズーム 100%</div>
+        <label class="check"><input type="checkbox" id="grid" checked>水平確認用のグリッドを表示</label>
+      </div>
+
+      <div class="sec">
+        <div class="label">書き出し</div>
+        <button class="btn primary wide" type="button" id="export" disabled>補正した動画を書き出す</button>
+        <div class="progress" id="progWrap" hidden><div id="prog"></div></div>
+        <div class="status" id="exportStatus">動画を開くと書き出せます。</div>
+        <button class="btn wide" type="button" id="cancel" hidden>書き出しを中止</button>
+        <div class="result" id="result" hidden>
+          <video id="resultVideo" controls playsinline></video>
+          <button class="btn primary wide" type="button" id="save">ファイルに保存</button>
+          <p class="tip" id="saveTip" hidden></p>
+        </div>
+        <p class="keys">書き出しは実時間で再生しながら録画します。完了まで画面を開いたままにしてください（スマホは画面ロックしないでください）。保存形式は MP4 で、スマホの写真アプリに入れられます。<br><kbd>←</kbd><kbd>→</kbd> 0.1° ／ <kbd>Shift</kbd>+矢印 1° ／ <kbd>Space</kbd> 再生</p>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const out = $('out'), octx = out.getContext('2d');
+  const overlay = $('overlay'), ovctx = overlay.getContext('2d');
+  const graph = $('graph'), gctx = graph.getContext('2d');
+  const video = $('video');
+  const frame = $('frame');
+  const HAS_RVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+  const state = {
+    mode: 'track',     // 'fixed' | 'track'
+    fixedAngle: 0,     // fixed mode correction (deg); positive = rotate clockwise
+    offset: 0,         // tracking mode fine offset (deg)
+    strength: 40,      // position stabilisation strength 0..100
+    posStab: true,
+    fit: 'fill',
+    grid: true,
+    compare: false,
+    source: 'demo',    // 'demo' | 'video'
+    W: 1280, H: 720,
+    fileName: 'video',
+    exporting: false,
+    analyzing: false,
+    track: null,
+    trackZoom: 1,
+    resultBlob: null, resultExt: 'webm'
+  };
+
+  /* ================= Demo: swaying Dutch angle + handheld shake ================= */
+  const DEMO_LEN = 10, DEMO_FPS = 30;
+  const TAU = Math.PI * 2;
+  const demoSway = (t) => 6 + 8 * Math.sin(TAU * t / 5) + 1.5 * Math.sin(TAU * t / 2);
+  const demoShakeRot = (t) => 0.9 * Math.sin(TAU * 3.1 * t) + 0.5 * Math.sin(TAU * 5.3 * t + 1);
+  const demoShakeX = (t) => 13 * Math.sin(TAU * 2.3 * t) + 6 * Math.sin(TAU * 4.7 * t + 2);
+  const demoShakeY = (t) => 10 * Math.sin(TAU * 1.9 * t + 1) + 5 * Math.sin(TAU * 6.1 * t);
+  const demo = document.createElement('canvas');
+  demo.width = 1280; demo.height = 720;
+  const dctx = demo.getContext('2d');
+  const buildings = [];
+  (function seed() {
+    let x = -500, r = 7;
+    const rnd = () => (r = (r * 9301 + 49297) % 233280) / 233280;
+    while (x < 1800) {
+      const w = 90 + rnd() * 120, h = 140 + rnd() * 260;
+      buildings.push({ x, w, h, tone: 0.25 + rnd() * 0.35, lit: rnd() });
+      x += w + 10 + rnd() * 30;
+    }
+  })();
+  function drawDemo(sec) {
+    const W = demo.width, H = demo.height, c = dctx;
+    const t = sec * 1000;
+    c.save();
+    c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+    c.translate(W / 2 + demoShakeX(sec), H / 2 + demoShakeY(sec));
+    c.rotate((demoSway(sec) + demoShakeRot(sec)) * Math.PI / 180);
+    c.scale(1.6, 1.6);
+    c.translate(-W / 2, -H / 2);
+    const horizon = 470;
+    const sky = c.createLinearGradient(0, -300, 0, horizon);
+    sky.addColorStop(0, '#2C4A7A'); sky.addColorStop(1, '#E9A86A');
+    c.fillStyle = sky; c.fillRect(-600, -400, W + 1200, horizon + 400);
+    c.fillStyle = '#FFE2A8';
+    c.beginPath(); c.arc(860, 330, 46, 0, TAU); c.fill();
+    for (const b of buildings) {
+      const g = Math.round(40 + b.tone * 80);
+      c.fillStyle = `rgb(${g},${g + 6},${g + 18})`;
+      c.fillRect(b.x, horizon - b.h, b.w, b.h);
+      c.fillStyle = 'rgba(255,214,140,.75)';
+      for (let wy = horizon - b.h + 18; wy < horizon - 20; wy += 26)
+        for (let wx = b.x + 12; wx < b.x + b.w - 16; wx += 22)
+          if (((wx * 7 + wy * 13 + Math.floor(b.lit * 100)) % 5) < 2) c.fillRect(wx, wy, 10, 14);
+    }
+    c.fillStyle = '#2A2D31'; c.fillRect(-600, horizon, W + 1200, 500);
+    c.fillStyle = '#5B5F66'; c.fillRect(-600, horizon, W + 1200, 14);
+    c.fillStyle = '#E8E2CF';
+    const off = (t * 0.25) % 120;
+    for (let x = -600 - off; x < W + 600; x += 120) c.fillRect(x, horizon + 90, 60, 6);
+    for (let x = -300; x < W + 400; x += 330) {
+      c.fillStyle = '#1B1D20'; c.fillRect(x, horizon - 190, 7, 190);
+      c.fillRect(x, horizon - 190, 40, 6);
+    }
+    const cx = ((t * 0.18) % (W + 900)) - 450;
+    c.fillStyle = '#C23B2E'; c.fillRect(cx, horizon + 30, 150, 40);
+    c.fillRect(cx + 30, horizon + 6, 80, 28);
+    c.fillStyle = '#111'; c.beginPath(); c.arc(cx + 32, horizon + 72, 13, 0, 7); c.arc(cx + 118, horizon + 72, 13, 0, 7); c.fill();
+    c.restore();
+  }
+
+  /* ================= Time ================= */
+  let demoPlaying = true, demoSec = 0, last = performance.now();
+  let frameTime = 0; // media time of the last presented video frame
+  function nowSec() {
+    if (state.source !== 'video') return demoSec;
+    return (video.paused || !HAS_RVFC) ? video.currentTime : frameTime;
+  }
+  function duration() { return state.source === 'video' ? (isFinite(video.duration) ? video.duration : 0) : DEMO_LEN; }
+
+  /* ================= Path lookup ================= */
+  let lastIdx = 0;
+  function locate(t) {
+    const T = state.track.t, n = T.length;
+    if (n < 2 || t <= T[0]) return [0, 0];
+    if (t >= T[n - 1]) return [n - 1, 0];
+    let i = Math.min(lastIdx, n - 2);
+    if (!(T[i] <= t && t < T[i + 1])) {
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T[m] <= t) lo = m; else hi = m; }
+      i = lo;
+    }
+    lastIdx = i;
+    return [i, (t - T[i]) / (T[i + 1] - T[i])];
+  }
+  const lerpAt = (arr, i, f) => f ? arr[i] + (arr[i + 1] - arr[i]) * f : arr[i];
+  function correctionAt(t) {
+    if (state.mode !== 'track') return { a: state.fixedAngle, ex: 0, ey: 0 };
+    if (!state.track) return { a: state.offset, ex: 0, ey: 0 };
+    const [i, f] = locate(t), tr = state.track;
+    return { a: lerpAt(tr.ang, i, f), ex: lerpAt(tr.ex, i, f), ey: lerpAt(tr.ey, i, f) };
+  }
+
+  /* ================= Geometry & render ================= */
+  function fillScale(deg, W, H, ex = 0, ey = 0) {
+    const t = Math.abs(deg) * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+    const rx = W / 2 * c + H / 2 * s, ry = W / 2 * s + H / 2 * c;
+    return Math.max(1, rx / Math.max(1, W / 2 - Math.abs(ex)), ry / Math.max(1, H / 2 - Math.abs(ey)));
+  }
+  function currentSource() { return state.source === 'video' ? video : demo; }
+
+  function render(t) {
+    const W = state.W, H = state.H;
+    const cor = state.compare ? { a: 0, ex: 0, ey: 0 } : correctionAt(t);
+    let s = 1;
+    if (!state.compare && state.fit === 'fill') s = state.mode === 'track' ? state.trackZoom : fillScale(cor.a, W, H);
+    octx.save();
+    octx.fillStyle = '#000'; octx.fillRect(0, 0, W, H);
+    octx.translate(W / 2, H / 2);
+    octx.rotate(cor.a * Math.PI / 180);
+    octx.scale(s, s);
+    octx.translate(-cor.ex, -cor.ey);
+    octx.imageSmoothingQuality = 'high';
+    try { octx.drawImage(currentSource(), -W / 2, -H / 2, W, H); } catch (e) {}
+    octx.restore();
+    return cor.a;
+  }
+
+  function drawOverlay() {
+    const r = overlay.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = Math.max(1, Math.round(r.width * dpr));
+    overlay.height = Math.max(1, Math.round(r.height * dpr));
+    ovctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ovctx.clearRect(0, 0, r.width, r.height);
+    if (!state.grid || state.compare) return;
+    ovctx.lineWidth = 1;
+    ovctx.strokeStyle = 'rgba(255,255,255,.28)';
+    const n = 8;
+    ovctx.beginPath();
+    for (let i = 1; i < n; i++) {
+      const y = Math.round(r.height * i / n) + .5; ovctx.moveTo(0, y); ovctx.lineTo(r.width, y);
+      const x = Math.round(r.width * i / n) + .5; ovctx.moveTo(x, 0); ovctx.lineTo(x, r.height);
+    }
+    ovctx.stroke();
+    ovctx.strokeStyle = 'rgba(240,178,58,.9)'; ovctx.lineWidth = 1.5;
+    ovctx.beginPath(); ovctx.moveTo(0, r.height / 2); ovctx.lineTo(r.width, r.height / 2); ovctx.stroke();
+  }
+
+  function setSize(W, H) {
+    state.W = W; state.H = H;
+    out.width = W; out.height = H;
+    frame.style.aspectRatio = `${W} / ${H}`;
+    frame.style.width = `min(100%, calc(66vh * ${(W / H).toFixed(4)}))`;
+    requestAnimationFrame(drawOverlay);
+  }
+  new ResizeObserver(() => { drawOverlay(); drawGraph(); }).observe(frame);
+
+  /* ================= Readout ================= */
+  const fmt = (v) => { const a = Math.abs(v).toFixed(1); return a === '0.0' ? '0.0' : (v > 0 ? '+' : '−') + a; };
+  const vialPos = (d) => (50 + Math.max(-45, Math.min(45, d)) / 45 * 50 * 0.92) + '%';
+  let lastShown = null;
+  function showReadout(deg) {
+    const key = deg.toFixed(1);
+    if (key === lastShown) return;
+    lastShown = key;
+    $('deg').innerHTML = fmt(deg) + '<small>°</small>';
+    $('dir').textContent = Math.abs(deg) < 0.05 ? '回転なし' : deg > 0 ? '時計回りに回転' : '反時計回りに回転';
+    $('bubble').style.left = vialPos(deg);
+  }
+  (function ticks() {
+    const v = $('vial');
+    for (const d of [-40, -30, -20, -10, -5, 0, 5, 10, 20, 30, 40]) {
+      const t = document.createElement('div');
+      t.className = 'tick' + (d === 0 ? ' zero' : '');
+      t.style.left = vialPos(d);
+      v.insertBefore(t, v.firstChild);
+    }
+  })();
+  function updateZoomNote() {
+    if (state.fit === 'keep') { $('zoomNote').textContent = 'ズーム 100%（四隅に黒い余白が出ます）'; return; }
+    const s = state.mode === 'track' ? state.trackZoom : fillScale(state.fixedAngle, state.W, state.H);
+    $('zoomNote').textContent = state.mode === 'track'
+      ? `ズーム ${Math.round(s * 100)}%（最大の傾きとブレに合わせて一定）`
+      : `ズーム ${Math.round(s * 100)}%（黒い余白が出ないよう拡大）`;
+  }
+
+  /* ================= Controls ================= */
+  function sliderValue() { return state.mode === 'track' ? state.offset : state.fixedAngle; }
+  function setSlider(v) {
+    const lim = state.mode === 'track' ? 15 : 45;
+    v = Math.max(-lim, Math.min(lim, Math.round(v * 10) / 10));
+    if (Object.is(v, -0)) v = 0;
+    if (state.mode === 'track') { state.offset = v; derive(); }
+    else { state.fixedAngle = v; updateZoomNote(); }
+    $('angle').value = v;
+    $('angleVal').textContent = fmt(v) + '°';
+    drawGraph();
+    if (state.source === 'video' && video.paused) render(video.currentTime);
+  }
+  function applyMode() {
+    const tr = state.mode === 'track';
+    $('trackBox').hidden = !tr;
+    $('auto').hidden = tr;
+    $('angleLabel').textContent = tr ? '微調整（全体に足す角度）' : '補正角';
+    const lim = tr ? 15 : 45;
+    $('angle').min = -lim; $('angle').max = lim;
+    $('autoStatus').textContent = '';
+    $('autoStatus').classList.remove('warn');
+    setSlider(sliderValue());
+    if (tr) derive(); else updateZoomNote();
+    lastShown = null;
+    drawGraph();
+  }
+  function strengthSec() { return 0.1 + state.strength / 100 * 1.9; }
+  function showStrength() {
+    $('smoothVal').textContent = state.posStab ? `${state.strength}（${strengthSec().toFixed(1)} 秒）` : 'オフ';
+    $('smooth').disabled = !state.posStab;
+  }
+  $('angle').addEventListener('input', (e) => setSlider(parseFloat(e.target.value)));
+  document.querySelectorAll('[data-step]').forEach((b) =>
+    b.addEventListener('click', () => setSlider(sliderValue() + parseFloat(b.dataset.step))));
+  $('zero').addEventListener('click', () => setSlider(0));
+  document.querySelectorAll('input[name=mode]').forEach((r) =>
+    r.addEventListener('change', () => {
+      state.mode = r.value;
+      applyMode();
+      if (state.mode === 'track' && !state.track && !state.analyzing) analyzeTrack();
+    }));
+  document.querySelectorAll('input[name=fit]').forEach((r) =>
+    r.addEventListener('change', () => { state.fit = r.value; updateZoomNote(); }));
+  $('grid').addEventListener('change', (e) => { state.grid = e.target.checked; drawOverlay(); });
+  $('smooth').addEventListener('input', (e) => { state.strength = +e.target.value; showStrength(); derive(); });
+  $('posStab').addEventListener('change', (e) => { state.posStab = e.target.checked; showStrength(); derive(); });
+
+  const cmp = $('compare');
+  const cmpOn = (e) => { e.preventDefault(); state.compare = true; $('badge').textContent = '元の映像'; $('badge').classList.add('orig'); drawOverlay(); };
+  const cmpOff = () => { if (!state.compare) return; state.compare = false; updateBadge(); drawOverlay(); };
+  cmp.addEventListener('pointerdown', cmpOn);
+  ['pointerup', 'pointerleave', 'pointercancel', 'blur'].forEach((ev) => cmp.addEventListener(ev, cmpOff));
+  function updateBadge() {
+    $('badge').classList.remove('orig');
+    $('badge').textContent = state.source === 'demo' ? 'サンプル映像（揺れるダッチアングル＋手ぶれ）' : '補正後';
+  }
+
+  /* ================= Image analysis primitives ================= */
+  const BINS = 180; // 0.5° orientation bins over [-45°, 45°)
+  const ana = document.createElement('canvas');
+  const actx = ana.getContext('2d', { willReadFrequently: true });
+
+  function boxBlur(src, dst, W, H, r) {
+    const tmp = new Float32Array(W * H), n = 2 * r + 1;
+    for (let y = 0; y < H; y++) {
+      let acc = 0; const row = y * W;
+      for (let x = -r; x <= r; x++) acc += src[row + Math.min(W - 1, Math.max(0, x))];
+      for (let x = 0; x < W; x++) {
+        tmp[row + x] = acc / n;
+        acc += src[row + Math.min(W - 1, x + r + 1)] - src[row + Math.max(0, x - r)];
+      }
+    }
+    for (let x = 0; x < W; x++) {
+      let acc = 0;
+      for (let y = -r; y <= r; y++) acc += tmp[Math.min(H - 1, Math.max(0, y)) * W + x];
+      for (let y = 0; y < H; y++) {
+        dst[y * W + x] = acc / n;
+        acc += tmp[Math.min(H - 1, y + r + 1) * W + x] - tmp[Math.max(0, y - r) * W + x];
+      }
+    }
+  }
+  function grabGray(src, AW) {
+    const AH = Math.max(60, Math.round(AW * state.H / state.W));
+    if (ana.width !== AW || ana.height !== AH) { ana.width = AW; ana.height = AH; }
+    actx.filter = 'blur(0.7px)';
+    actx.drawImage(src, 0, 0, AW, AH);
+    actx.filter = 'none';
+    const d = actx.getImageData(0, 0, AW, AH).data;
+    const g = new Float32Array(AW * AH);
+    for (let i = 0, p = 0; i < g.length; i++, p += 4) g[i] = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+    return { g, W: AW, H: AH };
+  }
+  // Structure tensor -> (a) edge-orientation histogram for the horizon, (b) good corners to track.
+  function tensorScan(lv, hist, wantCorners) {
+    const { g, W, H } = lv, N = W * H;
+    const xx = new Float32Array(N), yy = new Float32Array(N), xy = new Float32Array(N);
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        const gx = (g[i - W + 1] + 2 * g[i + 1] + g[i + W + 1]) - (g[i - W - 1] + 2 * g[i - 1] + g[i + W - 1]);
+        const gy = (g[i + W - 1] + 2 * g[i + W] + g[i + W + 1]) - (g[i - W - 1] + 2 * g[i - W] + g[i - W + 1]);
+        xx[i] = gx * gx; yy[i] = gy * gy; xy[i] = gx * gy;
+      }
+    }
+    boxBlur(xx, xx, W, H, 4); boxBlur(yy, yy, W, H, 4); boxBlur(xy, xy, W, H, 4);
+    const mx = Math.round(W * 0.05), my = Math.round(H * 0.05);
+    const GX = 16, GY = 9, cellBest = new Float32Array(GX * GY), cellIdx = new Int32Array(GX * GY).fill(-1);
+    const cm = 14;
+    let globalMax = 0;
+    for (let y = my; y < H - my; y++) {
+      for (let x = mx; x < W - mx; x++) {
+        const i = y * W + x;
+        const tr = xx[i] + yy[i];
+        if (tr < 900) continue;
+        const dx = xx[i] - yy[i], dxy = 2 * xy[i];
+        const root = Math.sqrt(dx * dx + dxy * dxy);
+        if (hist && tr >= 3600) {
+          const coh = root / tr;
+          if (coh >= 0.85) {
+            let ang = 0.5 * Math.atan2(dxy, dx) * 180 / Math.PI;
+            ang = ((ang % 90) + 135) % 90 - 45;
+            hist[Math.min(BINS - 1, Math.floor((ang + 45) * 2))] += Math.sqrt(tr) * coh;
+          }
+        }
+        if (wantCorners && x >= cm && y >= cm && x < W - cm && y < H - cm) {
+          const minEig = (tr - root) / 2;
+          if (minEig > globalMax) globalMax = minEig;
+          const c = Math.min(GY - 1, Math.floor((y - cm) / (H - 2 * cm) * GY)) * GX + Math.min(GX - 1, Math.floor((x - cm) / (W - 2 * cm) * GX));
+          if (minEig > cellBest[c]) { cellBest[c] = minEig; cellIdx[c] = i; }
+        }
+      }
+    }
+    const pts = [];
+    if (wantCorners) {
+      const thr = Math.max(150, globalMax * 0.01);
+      for (let c = 0; c < cellIdx.length; c++) if (cellIdx[c] >= 0 && cellBest[c] > thr) pts.push({ x: cellIdx[c] % W, y: (cellIdx[c] / W) | 0 });
+    }
+    return pts;
+  }
+  function accumulate(src, hist, AW) { tensorScan(grabGray(src, AW || 640), hist, false); }
+
+  function smoothHist(hist) {
+    const sm = new Float32Array(BINS), k = [1, 4, 7, 4, 1];
+    for (let i = 0; i < BINS; i++) {
+      let s = 0;
+      for (let j = -2; j <= 2; j++) s += hist[(i + j + BINS) % BINS] * k[j + 2];
+      sm[i] = s;
+    }
+    return sm;
+  }
+  const binToDeg = (b) => (b + 0.5) / 2 - 45;
+  function refine(sm, best) {
+    const y0 = sm[(best - 1 + BINS) % BINS], y1 = sm[best], y2 = sm[(best + 1) % BINS];
+    const den = y0 - 2 * y1 + y2;
+    const off = den !== 0 ? Math.max(-0.5, Math.min(0.5, 0.5 * (y0 - y2) / den)) : 0;
+    return best + off;
+  }
+  function peakOf(hist) {
+    const sm = smoothHist(hist);
+    let best = 0, total = 0;
+    for (let i = 0; i < BINS; i++) { total += sm[i]; if (sm[i] > sm[best]) best = i; }
+    if (total === 0) return null;
+    return { deg: binToDeg(refine(sm, best)), confidence: sm[best] / (total / BINS) };
+  }
+
+  /* ---- Pyramidal Lucas–Kanade feature tracking ---- */
+  function down(l) {
+    const W = l.W >> 1, H = l.H >> 1, g = new Float32Array(W * H), a = l.g, LW = l.W;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = 2 * y * LW + 2 * x;
+      g[y * W + x] = (a[i] + a[i + 1] + a[i + LW] + a[i + LW + 1]) * 0.25;
+    }
+    return { g, W, H };
+  }
+  function addGrads(l) {
+    const { g, W, H } = l, gx = new Float32Array(W * H), gy = new Float32Array(W * H);
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      gx[i] = (g[i + 1] - g[i - 1]) * 0.5; gy[i] = (g[i + W] - g[i - W]) * 0.5;
+    }
+    l.gx = gx; l.gy = gy;
+  }
+  function buildPyr(l0) {
+    const p = [l0];
+    while (p.length < 3) p.push(down(p[p.length - 1]));
+    p.forEach(addGrads);
+    return p;
+  }
+  function bil(a, W, x, y) {
+    const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, i = y0 * W + x0;
+    return (a[i] * (1 - fx) + a[i + 1] * fx) * (1 - fy) + (a[i + W] * (1 - fx) + a[i + W + 1] * fx) * fy;
+  }
+  const LK_R = 5, LK_N = (2 * LK_R + 1) ** 2;
+  const tI = new Float32Array(LK_N), tX = new Float32Array(LK_N), tY = new Float32Array(LK_N);
+  function lkTrack(P, C, pts) {
+    const res = [];
+    for (const pt of pts) {
+      let gx = 0, gy = 0, ok = true;
+      for (let L = P.length - 1; L >= 0; L--) {
+        const sc = 1 / (1 << L), px = pt.x * sc, py = pt.y * sc, lv = P[L], cv = C[L];
+        let vx = 0, vy = 0;
+        if (px >= LK_R + 1 && py >= LK_R + 1 && px < lv.W - LK_R - 2 && py < lv.H - LK_R - 2) {
+          let gxx = 0, gyy = 0, gxy = 0, k = 0;
+          for (let j = -LK_R; j <= LK_R; j++) for (let i = -LK_R; i <= LK_R; i++, k++) {
+            const x = px + i, y = py + j;
+            tI[k] = bil(lv.g, lv.W, x, y);
+            const ix = bil(lv.gx, lv.W, x, y), iy = bil(lv.gy, lv.W, x, y);
+            tX[k] = ix; tY[k] = iy;
+            gxx += ix * ix; gyy += iy * iy; gxy += ix * iy;
+          }
+          const det = gxx * gyy - gxy * gxy;
+          if (det < 1e-3) { ok = false; break; }
+          for (let it = 0; it < 12; it++) {
+            const qx = px + gx + vx, qy = py + gy + vy;
+            if (qx < LK_R + 1 || qy < LK_R + 1 || qx >= cv.W - LK_R - 2 || qy >= cv.H - LK_R - 2) { ok = false; break; }
+            let bx = 0, by = 0; k = 0;
+            for (let j = -LK_R; j <= LK_R; j++) for (let i = -LK_R; i <= LK_R; i++, k++) {
+              const diff = tI[k] - bil(cv.g, cv.W, qx + i, qy + j);
+              bx += diff * tX[k]; by += diff * tY[k];
+            }
+            const ex = (gyy * bx - gxy * by) / det, ey = (gxx * by - gxy * bx) / det;
+            vx += ex; vy += ey;
+            if (ex * ex + ey * ey < 1e-4) break;
+          }
+          if (!ok) break;
+        }
+        if (L > 0) { gx = 2 * (gx + vx); gy = 2 * (gy + vy); }
+        else { gx += vx; gy += vy; }
+      }
+      if (ok && isFinite(gx) && isFinite(gy) && Math.abs(gx) < 80 && Math.abs(gy) < 80) res.push([pt.x, pt.y, pt.x + gx, pt.y + gy]);
+    }
+    return res;
+  }
+  // Robust similarity (rotation + scale + shift) between two frames, RANSAC + least squares.
+  function fitSimilarity(m, cx, cy) {
+    const n = m.length;
+    if (n < 8) return null;
+    const A = m.map((p) => [p[0] - cx, p[1] - cy, p[2] - cx, p[3] - cy]);
+    let seed = 1234567;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const TH2 = 1.2 * 1.2;
+    const countIn = (a, b, tx, ty, keep) => {
+      let c = 0;
+      for (let k = 0; k < n; k++) {
+        const p = A[k], ex = a * p[0] - b * p[1] + tx - p[2], ey = b * p[0] + a * p[1] + ty - p[3];
+        if (ex * ex + ey * ey < TH2) { c++; if (keep) keep.push(p); }
+      }
+      return c;
+    };
+    let best = null, bestC = 0;
+    for (let it = 0; it < 220; it++) {
+      const p = A[(rnd() * n) | 0], q = A[(rnd() * n) | 0];
+      const dax = q[0] - p[0], day = q[1] - p[1], dbx = q[2] - p[2], dby = q[3] - p[3];
+      const den = dax * dax + day * day;
+      if (den < 400) continue;
+      const a = (dax * dbx + day * dby) / den, b = (dax * dby - day * dbx) / den;
+      const sc = Math.hypot(a, b);
+      if (sc < 0.8 || sc > 1.25) continue;
+      const tx = p[2] - (a * p[0] - b * p[1]), ty = p[3] - (b * p[0] + a * p[1]);
+      const c = countIn(a, b, tx, ty);
+      if (c > bestC) { bestC = c; best = [a, b, tx, ty]; }
+    }
+    if (!best || bestC < 6) return null;
+    let [a, b, tx, ty] = best, inl = [];
+    for (let pass = 0; pass < 3; pass++) {
+      inl = []; countIn(a, b, tx, ty, inl);
+      if (inl.length < 6) return null;
+      let mx = 0, my = 0, nx = 0, ny = 0;
+      for (const p of inl) { mx += p[0]; my += p[1]; nx += p[2]; ny += p[3]; }
+      mx /= inl.length; my /= inl.length; nx /= inl.length; ny /= inl.length;
+      let S = 0, sa = 0, sb = 0;
+      for (const p of inl) {
+        const x = p[0] - mx, y = p[1] - my, u = p[2] - nx, v = p[3] - ny;
+        S += x * x + y * y; sa += x * u + y * v; sb += x * v - y * u;
+      }
+      if (S < 1e-6) return null;
+      a = sa / S; b = sb / S;
+      tx = nx - (a * mx - b * my); ty = ny - (b * mx + a * my);
+    }
+    return { dth: Math.atan2(b, a) * 180 / Math.PI, dx: tx, dy: ty, inliers: inl.length, total: n };
+  }
+
+  /* ================= Fixed mode: one angle for the whole clip ================= */
+  const seekTo = (t) => new Promise((res) => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; video.removeEventListener('seeked', fin); res(); };
+    video.addEventListener('seeked', fin);
+    video.currentTime = t;
+    setTimeout(fin, 3000);
+  });
+  async function autoDetect() {
+    const st = $('autoStatus');
+    st.classList.remove('warn');
+    st.textContent = '解析中…';
+    $('auto').disabled = true;
+    const hist = new Float32Array(BINS);
+    try {
+      if (state.source === 'video' && duration() > 0) {
+        const wasPaused = video.paused, back = video.currentTime;
+        video.pause();
+        const D = duration();
+        for (const f of [0.1, 0.3, 0.5, 0.7, 0.9]) { await seekTo(D * f); accumulate(video, hist); }
+        await seekTo(back);
+        if (!wasPaused) video.play();
+      } else {
+        accumulate(currentSource(), hist);
+      }
+      const p = peakOf(hist);
+      if (!p || p.confidence < 1.6) {
+        st.classList.add('warn');
+        st.textContent = 'まっすぐな線が少なく、角度を判定できませんでした。スライダーで調整してください。';
+      } else {
+        if (state.mode === 'fixed') setSlider(-p.deg);
+        const q = p.confidence > 4 ? '高' : p.confidence > 2.5 ? '中' : '低';
+        st.textContent = `${Math.abs(p.deg).toFixed(1)}° の傾きを検出しました（確度：${q}）。`;
+      }
+    } catch (e) {
+      st.classList.add('warn');
+      st.textContent = 'この動画は解析できませんでした。スライダーで調整してください。';
+    }
+    $('auto').disabled = false;
+  }
+  $('auto').addEventListener('click', autoDetect);
+
+  /* ================= Tracking mode: full stabilisation ================= */
+  // Per frame: (1) frame-to-frame rotation & shift from tracked feature points,
+  // (2) absolute horizon angle from edge orientations. Rotation from (1) captures fast
+  // shake precisely but drifts; (2) has no drift but is noisy. They are fused so the
+  // horizon stays level on every frame.
+  const TRACK_W = 480;
+  function makeFrameProcessor() {
+    const frames = [];
+    let prev = null;
+    return {
+      frames,
+      push(src, t) {
+        const lv = grabGray(src, TRACK_W);
+        const hist = new Float32Array(BINS);
+        const pts = tensorScan(lv, hist, true);
+        const pyr = buildPyr(lv);
+        let m = null;
+        if (prev) m = fitSimilarity(lkTrack(prev.pyr, pyr, prev.pts), lv.W / 2, lv.H / 2);
+        frames.push({ t, hist, dth: m ? m.dth : 0, dx: m ? m.dx : 0, dy: m ? m.dy : 0, ok: !prev || !!m });
+        prev = { pyr, pts };
+      }
+    };
+  }
+
+  function gaussSmooth(t, v, sigma, w) {
+    const N = t.length, outv = new Float64Array(N);
+    if (sigma <= 0 || N < 2) { for (let i = 0; i < N; i++) outv[i] = v[i]; return outv; }
+    let j0 = 0;
+    for (let i = 0; i < N; i++) {
+      while (j0 < N && t[j0] < t[i] - 3 * sigma) j0++;
+      let s = 0, ws = 0;
+      for (let j = j0; j < N && t[j] <= t[i] + 3 * sigma; j++) {
+        const d = (t[j] - t[i]) / sigma, ww = Math.exp(-0.5 * d * d) * (w ? w[j] : 1);
+        s += v[j] * ww; ws += ww;
+      }
+      outv[i] = ws > 1e-9 ? s / ws : NaN;
+    }
+    return outv;
+  }
+
+  function buildTrack(frames) {
+    const N = frames.length, k = state.W / TRACK_W;
+    const t = frames.map((f) => f.t);
+    const R = new Float64Array(N), X = new Float64Array(N), Y = new Float64Array(N);
+    for (let i = 1; i < N; i++) {
+      R[i] = R[i - 1] + frames[i].dth;
+      X[i] = X[i - 1] + frames[i].dx * k;
+      Y[i] = Y[i - 1] + frames[i].dy * k;
+    }
+    // Horizon offset c = absolute tilt − accumulated rotation. Should be near-constant.
+    const shifted = [], conf = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      const sm = smoothHist(frames[i].hist);
+      let mx = 0, tot = 0;
+      for (let b = 0; b < BINS; b++) { mx = Math.max(mx, sm[b]); tot += sm[b]; }
+      conf[i] = tot > 0 ? mx / (tot / BINS) : 0;
+      const ns = new Float32Array(BINS);
+      if (mx > 0) {
+        const sh = R[i] * 2;
+        for (let b = 0; b < BINS; b++) {
+          let x = (b + sh) % BINS; if (x < 0) x += BINS;
+          const x0 = Math.floor(x), f = x - x0;
+          ns[b] = (sm[x0 % BINS] * (1 - f) + sm[(x0 + 1) % BINS] * f) / mx;
+        }
+      }
+      shifted.push(ns);
+    }
+    // Dynamic programming: one offset per frame, strongly penalising changes.
+    const LAMBDA = 0.12;
+    const acc = new Float32Array(shifted[0]), back = [];
+    for (let i = 1; i < N; i++) {
+      const best = new Float32Array(acc), arg = new Int16Array(BINS);
+      for (let b = 0; b < BINS; b++) arg[b] = b;
+      for (let b = 1; b < BINS; b++) if (best[b - 1] - LAMBDA > best[b]) { best[b] = best[b - 1] - LAMBDA; arg[b] = arg[b - 1]; }
+      for (let b = BINS - 2; b >= 0; b--) if (best[b + 1] - LAMBDA > best[b]) { best[b] = best[b + 1] - LAMBDA; arg[b] = arg[b + 1]; }
+      back.push(arg);
+      for (let b = 0; b < BINS; b++) acc[b] = best[b] + shifted[i][b];
+    }
+    let b = 0; for (let i = 1; i < BINS; i++) if (acc[i] > acc[b]) b = i;
+    const path = new Int16Array(N); path[N - 1] = b;
+    for (let i = N - 1; i > 0; i--) { b = back[i - 1][b]; path[i - 1] = b; }
+    const c = new Float64Array(N), w = new Float64Array(N);
+    let wsum = 0;
+    for (let i = 0; i < N; i++) {
+      c[i] = binToDeg(refine(shifted[i], path[i]));
+      w[i] = Math.max(0, Math.min(1, (conf[i] - 1.6) / 2.5)) * shifted[i][path[i]];
+      wsum += w[i];
+    }
+    let cs;
+    const hasHorizon = wsum > N * 0.05;
+    if (hasHorizon) {
+      cs = gaussSmooth(t, c, 1.2, w);
+      let gm = 0; for (let i = 0; i < N; i++) gm += c[i] * w[i]; gm /= wsum;
+      for (let i = 0; i < N; i++) if (!isFinite(cs[i])) cs[i] = gm;
+    } else cs = new Float64Array(N); // no straight lines: keep the first frame's angle, still remove shake
+    const T = new Float64Array(N), h = new Float64Array(N);
+    for (let i = 0; i < N; i++) { T[i] = R[i] + cs[i]; h[i] = R[i] + c[i]; }
+    const okRatio = frames.filter((f) => f.ok).length / N;
+    return { t, T, h, hw: w, X, Y, hasHorizon, okRatio, ang: new Float64Array(N), ex: new Float64Array(N), ey: new Float64Array(N) };
+  }
+
+  // Turn the measured path into per-frame corrections (cheap; rerun when sliders change).
+  function derive() {
+    const tr = state.track;
+    if (!tr) { state.trackZoom = fillScale(state.offset, state.W, state.H); updateZoomNote(); return; }
+    const N = tr.t.length, W = state.W, H = state.H;
+    for (let i = 0; i < N; i++) tr.ang[i] = -tr.T[i] + state.offset;
+    if (state.posStab) {
+      const sig = strengthSec();
+      const Xs = gaussSmooth(tr.t, tr.X, sig), Ys = gaussSmooth(tr.t, tr.Y, sig);
+      const LX = W * 0.1, LY = H * 0.1;
+      for (let i = 0; i < N; i++) {
+        tr.ex[i] = Math.max(-LX, Math.min(LX, tr.X[i] - Xs[i]));
+        tr.ey[i] = Math.max(-LY, Math.min(LY, tr.Y[i] - Ys[i]));
+      }
+    } else { tr.ex.fill(0); tr.ey.fill(0); }
+    let z = 1;
+    for (let i = 0; i < N; i++) z = Math.max(z, fillScale(tr.ang[i], W, H, tr.ex[i], tr.ey[i]));
+    state.trackZoom = Math.min(z, 3);
+    updateZoomNote();
+    drawGraph();
+  }
+
+  let anaCancel = false;
+  function analyzeByPlayback(proc, D, onProgress) {
+    return new Promise((resolve) => {
+      let done = false, got = 0, ema = 10, interval = 1 / 30, lastMT = -1;
+      const finish = (ok) => { if (done) return; done = true; video.pause(); video.playbackRate = 1; resolve(ok); };
+      const cb = (now, meta) => {
+        if (done) return;
+        if (anaCancel) return finish(true);
+        const mt = meta.mediaTime;
+        if (lastMT >= 0 && mt > lastMT) interval = Math.min(interval, mt - lastMT) || interval;
+        if (mt > lastMT) {
+          const t0 = performance.now();
+          proc.push(video, mt);
+          ema = ema * 0.8 + (performance.now() - t0) * 0.2;
+          got++; lastMT = mt;
+          const rate = Math.max(0.2, Math.min(1, 0.75 * interval * 1000 / ema));
+          if (Math.abs(rate - video.playbackRate) > 0.05) video.playbackRate = rate;
+          onProgress(mt / D);
+        }
+        video.requestVideoFrameCallback(cb);
+      };
+      video.requestVideoFrameCallback(cb);
+      video.addEventListener('ended', () => finish(true), { once: true });
+      setTimeout(() => { if (!got) finish(false); }, 2500); // rVFC never fired: fall back
+      video.play().catch(() => finish(false));
+    });
+  }
+  async function analyzeBySeeking(proc, D, onProgress) {
+    const rate = D <= 60 ? 15 : Math.max(2, Math.floor(900 / D));
+    for (let t = 0; t < D && !anaCancel; t += 1 / rate) {
+      await seekTo(Math.min(t, D - 0.01));
+      proc.push(video, video.currentTime);
+      onProgress(t / D);
+    }
+  }
+
+  async function analyzeTrack() {
+    if (state.analyzing || state.exporting) return;
+    state.analyzing = true; anaCancel = false;
+    const btn = $('analyze'), st = $('autoStatus');
+    btn.disabled = true; $('export').disabled = true;
+    st.classList.remove('warn');
+    $('anaProgWrap').hidden = false; $('anaProg').style.width = '0%';
+    const D = duration();
+    const proc = makeFrameProcessor();
+    const isVideo = state.source === 'video';
+    const wasPaused = isVideo ? video.paused : !demoPlaying;
+    const back = nowSec();
+    const progress = (f) => {
+      $('anaProg').style.width = Math.min(100, f * 100) + '%';
+      st.textContent = `揺れを解析中… ${proc.frames.length} コマ`;
+    };
+    let wasMuted = video.muted;
+    try {
+      if (isVideo) {
+        video.pause();
+        video.muted = true;
+        if (audioGain) audioGain.gain.value = 0;
+        await seekTo(0);
+        let ok = HAS_RVFC ? await analyzeByPlayback(proc, D, progress) : false;
+        if (!ok && !anaCancel) { proc.frames.length = 0; await analyzeBySeeking(proc, D, progress); }
+      } else {
+        demoPlaying = false;
+        const n = DEMO_LEN * DEMO_FPS;
+        for (let i = 0; i < n && !anaCancel; i++) {
+          const t = i / DEMO_FPS;
+          drawDemo(t); proc.push(demo, t);
+          if (i % 3 === 2) { progress((i + 1) / n); await new Promise((r) => setTimeout(r, 0)); }
+        }
+      }
+      if (anaCancel) throw new Error('cancel');
+      if (proc.frames.length < 2) throw new Error('too few');
+      state.track = buildTrack(proc.frames);
+      lastIdx = 0;
+      derive();
+      const tr = state.track;
+      let lo = Infinity, hi = -Infinity;
+      for (const v of tr.ang) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      const Rs = gaussSmooth(tr.t, tr.T, 0.5);
+      let rj = 0, pj = 0;
+      for (let i = 0; i < tr.t.length; i++) { rj = Math.max(rj, Math.abs(tr.T[i] - Rs[i])); pj = Math.max(pj, Math.hypot(tr.ex[i], tr.ey[i])); }
+      const parts = [`${tr.t.length} コマを解析。補正角 ${fmt(lo)}°〜${fmt(hi)}°`];
+      if (rj > 0.2) parts.push(`細かい回転ブレ 最大 ${rj.toFixed(1)}°`);
+      if (state.posStab && pj > 1) parts.push(`位置ブレ 最大 ${Math.round(pj)}px`);
+      st.textContent = parts.join('、') + ' を補正しています。';
+      if (!tr.hasHorizon) {
+        st.classList.add('warn');
+        st.textContent += ' まっすぐな線が少ないため、水平は最初のコマを基準にしています。「微調整」で合わせてください。';
+      } else if (tr.okRatio < 0.7) {
+        st.classList.add('warn');
+        st.textContent += ' 動きの追跡に失敗したコマが多いため、精度が落ちている可能性があります。';
+      }
+    } catch (e) {
+      if (!anaCancel) { st.classList.add('warn'); st.textContent = 'この動画は解析できませんでした。「一定の傾き」モードで手動調整してください。'; }
+    }
+    if (isVideo) {
+      video.muted = wasMuted;
+      if (audioGain) audioGain.gain.value = 1;
+      await seekTo(back);
+      if (!wasPaused) video.play();
+    } else { demoSec = back; demoPlaying = !wasPaused; }
+    $('anaProgWrap').hidden = true;
+    btn.disabled = false; btn.textContent = '揺れを解析し直す';
+    $('export').disabled = state.source !== 'video';
+    state.analyzing = false;
+    drawGraph();
+  }
+  $('analyze').addEventListener('click', analyzeTrack);
+
+  /* ================= Graph ================= */
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function drawGraph() {
+    if ($('trackBox').hidden) return;
+    const r = graph.getBoundingClientRect();
+    if (!r.width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = r.width, H = r.height;
+    if (graph.width !== Math.round(W * dpr)) { graph.width = Math.round(W * dpr); graph.height = Math.round(H * dpr); }
+    gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gctx.clearRect(0, 0, W, H);
+    const tr = state.track, D = duration() || 1;
+    const muted = cssVar('--muted'), accent = cssVar('--accent'), ink = cssVar('--ink'), line = cssVar('--line');
+    let m = 5;
+    if (tr) for (let i = 0; i < tr.t.length; i++) m = Math.max(m, Math.abs(tr.ang[i]));
+    m = Math.ceil(m / 5) * 5;
+    $('graphRange').textContent = `縦軸 ±${m}°`;
+    const pad = 6;
+    const X = (t) => pad + (W - 2 * pad) * t / D;
+    const Y = (d) => H / 2 - (H / 2 - pad) * d / m;
+    gctx.strokeStyle = line; gctx.lineWidth = 1;
+    gctx.beginPath();
+    for (const d of [-m / 2, m / 2]) { gctx.moveTo(0, Math.round(Y(d)) + .5); gctx.lineTo(W, Math.round(Y(d)) + .5); }
+    gctx.stroke();
+    gctx.strokeStyle = muted; gctx.globalAlpha = .6;
+    gctx.beginPath(); gctx.moveTo(0, Math.round(Y(0)) + .5); gctx.lineTo(W, Math.round(Y(0)) + .5); gctx.stroke();
+    gctx.globalAlpha = 1;
+    gctx.fillStyle = muted; gctx.font = '10px ' + cssVar('--font-num');
+    gctx.fillText(`+${m}°`, 4, 11); gctx.fillText(`−${m}°`, 4, H - 4);
+    if (!tr) {
+      gctx.fillStyle = muted; gctx.font = '12px ' + cssVar('--font-body');
+      gctx.fillText(state.analyzing ? '解析中…' : '「揺れを解析する」を押すとグラフが出ます', 30, H / 2 - 6);
+      return;
+    }
+    gctx.fillStyle = muted; gctx.globalAlpha = .5;
+    for (let i = 0; i < tr.t.length; i++) if (tr.hw[i] > 0.05) gctx.fillRect(X(tr.t[i]) - 1, Y(-tr.h[i] + state.offset) - 1, 2, 2);
+    gctx.globalAlpha = 1;
+    gctx.strokeStyle = accent; gctx.lineWidth = 1.6; gctx.lineJoin = 'round';
+    gctx.beginPath();
+    for (let i = 0; i < tr.t.length; i++) {
+      const x = X(tr.t[i]), y = Y(tr.ang[i]);
+      i ? gctx.lineTo(x, y) : gctx.moveTo(x, y);
+    }
+    gctx.stroke();
+    const t = nowSec(), px = X(t), py = Y(correctionAt(t).a);
+    gctx.strokeStyle = ink; gctx.lineWidth = 1;
+    gctx.beginPath(); gctx.moveTo(Math.round(px) + .5, 0); gctx.lineTo(Math.round(px) + .5, H); gctx.stroke();
+    gctx.fillStyle = accent; gctx.beginPath(); gctx.arc(px, py, 4, 0, TAU); gctx.fill();
+    gctx.strokeStyle = ink; gctx.stroke();
+  }
+  function seekFromGraph(e) {
+    if (state.exporting || state.analyzing) return;
+    const r = graph.getBoundingClientRect();
+    seekToFraction(Math.max(0, Math.min(1, (e.clientX - r.left - 6) / (r.width - 12))));
+  }
+  let graphDrag = false;
+  graph.addEventListener('pointerdown', (e) => { graphDrag = true; graph.setPointerCapture(e.pointerId); seekFromGraph(e); });
+  graph.addEventListener('pointermove', (e) => { if (graphDrag) seekFromGraph(e); });
+  graph.addEventListener('pointerup', () => { graphDrag = false; });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawGraph);
+  new MutationObserver(drawGraph).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  /* ================= Loading video ================= */
+  let rvfcLoop = false;
+  function onVideoFrame(now, meta) {
+    frameTime = meta.mediaTime;
+    if (!state.analyzing && state.source === 'video') showReadout(render(frameTime));
+    video.requestVideoFrameCallback(onVideoFrame);
+  }
+  async function loadFile(file) {
+    if (!file || !file.type.startsWith('video/') && !/\.(mp4|mov|webm|m4v|mkv)$/i.test(file.name)) {
+      $('exportStatus').textContent = '動画ファイルを選んでください。';
+      return;
+    }
+    if (state.exporting) return;
+    if (state.analyzing) {               // stop the running analysis, then load
+      anaCancel = true;
+      while (state.analyzing) await new Promise((r) => setTimeout(r, 50));
+    }
+    state.fileName = file.name.replace(/\.[^.]+$/, '') || 'video';
+    if (video.src) URL.revokeObjectURL(video.src);
+    video.src = URL.createObjectURL(file);
+    video.load();
+    video.addEventListener('loadeddata', async function once() {
+      video.removeEventListener('loadeddata', once);
+      state.source = 'video';
+      state.track = null;
+      $('analyze').textContent = '揺れを解析する';
+      // Cap the output at 1920px on the long edge: phones encode it reliably and Photos accepts it.
+      const cap = Math.min(1, 1920 / Math.max(video.videoWidth, video.videoHeight));
+      setSize(Math.round(video.videoWidth * cap / 2) * 2, Math.round(video.videoHeight * cap / 2) * 2);
+      state.offset = 0; state.fixedAngle = 0;
+      applyMode();
+      updateBadge();
+      if (HAS_RVFC && !rvfcLoop) { rvfcLoop = true; video.requestVideoFrameCallback(onVideoFrame); }
+      $('export').disabled = false;
+      $('exportStatus').textContent = `${file.name}（${video.videoWidth}×${video.videoHeight}）`;
+      $('result').hidden = true;
+      if (state.mode === 'track') await analyzeTrack(); else await autoDetect();
+    });
+    video.addEventListener('error', function once() {
+      video.removeEventListener('error', once);
+      $('exportStatus').textContent = 'このブラウザでは再生できない形式です。MP4（H.264）か WebM をお試しください。';
+    });
+  }
+  $('open').addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', (e) => { loadFile(e.target.files[0]); e.target.value = ''; });
+  const stage = $('stage');
+  let dragDepth = 0;
+  stage.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; $('dropHint').hidden = false; });
+  stage.addEventListener('dragover', (e) => e.preventDefault());
+  stage.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('dropHint').hidden = true; } });
+  stage.addEventListener('drop', (e) => {
+    e.preventDefault(); dragDepth = 0; $('dropHint').hidden = true;
+    loadFile(e.dataTransfer.files[0]);
+  });
+
+  /* ================= Transport ================= */
+  const tfmt = (s) => { s = Math.max(0, s || 0); return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
+  function togglePlay() {
+    if (state.exporting || state.analyzing) return;
+    if (state.source === 'video') { video.paused ? video.play() : video.pause(); }
+    else demoPlaying = !demoPlaying;
+  }
+  function seekToFraction(f) {
+    if (state.source === 'video') { if (isFinite(video.duration)) video.currentTime = video.duration * f; }
+    else demoSec = DEMO_LEN * f;
+  }
+  $('play').addEventListener('click', togglePlay);
+  $('seek').addEventListener('input', (e) => seekToFraction(e.target.value / 1000));
+  $('mute').addEventListener('click', () => {
+    video.muted = !video.muted;
+    $('mute').textContent = video.muted ? '音声オフ' : '音声オン';
+  });
+  function updateTransport() {
+    const D = duration(), t = nowSec();
+    const playing = state.source === 'video' ? !video.paused : demoPlaying;
+    $('play').textContent = playing ? '一時停止' : '再生';
+    if (document.activeElement !== $('seek')) $('seek').value = D ? Math.round(t / D * 1000) : 0;
+    $('time').textContent = `${tfmt(t)} / ${tfmt(D)}`;
+    $('seek').disabled = state.exporting || state.analyzing;
+    $('play').disabled = state.exporting || state.analyzing;
+  }
+
+  let graphTick = 0;
+  function loop(now) {
+    const dt = (now - last) / 1000; last = now;
+    if (!state.analyzing) {
+      if (state.source === 'demo') {
+        if (demoPlaying) demoSec = (demoSec + dt) % DEMO_LEN;
+        // Show the demo at its own 30 fps so the analysed path lines up with each frame.
+        const fs = Math.floor(demoSec * DEMO_FPS) / DEMO_FPS;
+        drawDemo(fs);
+        showReadout(render(fs));
+      } else if (video.paused || !HAS_RVFC) {
+        showReadout(render(video.currentTime));
+      }
+    }
+    updateTransport();
+    if (state.mode === 'track' && ++graphTick % 2 === 0) drawGraph();
+    if (state.exporting && isFinite(video.duration)) $('prog').style.width = (video.currentTime / video.duration * 100) + '%';
+    requestAnimationFrame(loop);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest('input[type=number], input[type=text], textarea')) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (e.target.id === 'angle' || e.target.id === 'seek' || e.target.id === 'smooth') return;
+      e.preventDefault();
+      setSlider(sliderValue() + (e.key === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 1 : 0.1));
+    } else if (e.key === ' ' && !e.target.closest('button')) { e.preventDefault(); togglePlay(); }
+  });
+
+  /* ================= Export ================= */
+  let audioCtx = null, audioDest = null, audioGain = null, recorder = null, cancelled = false;
+  function pickMime() {
+    const list = [
+      ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'mp4'], ['video/mp4;codecs=avc1.42E028,mp4a.40.2', 'mp4'],
+      ['video/mp4;codecs=avc1,mp4a', 'mp4'], ['video/mp4;codecs=h264,aac', 'mp4'], ['video/mp4', 'mp4'],
+      ['video/webm;codecs=vp9,opus', 'webm'], ['video/webm;codecs=vp8,opus', 'webm'], ['video/webm', 'webm']
+    ];
+    if (typeof MediaRecorder === 'undefined') return null;
+    for (const [m, ext] of list) if (MediaRecorder.isTypeSupported(m)) return { m, ext };
+    return { m: '', ext: 'webm' };
+  }
+  async function exportVideo() {
+    if (state.source !== 'video' || state.exporting || state.analyzing) return;
+    const mime = pickMime();
+    if (!mime || !out.captureStream) {
+      $('exportStatus').textContent = 'このブラウザは動画の書き出しに対応していません。Chrome、Edge、Safari の最新版をお使いください。';
+      return;
+    }
+    // Phones (iPhone especially) only allow sound and playback inside the tap itself,
+    // so set up audio and start the video before the first await.
+    try {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaElementSource(video);
+        audioDest = audioCtx.createMediaStreamDestination();
+        audioGain = audioCtx.createGain();
+        src.connect(audioDest); src.connect(audioGain); audioGain.connect(audioCtx.destination);
+      }
+      audioGain.gain.value = 0;
+      audioCtx.resume();
+    } catch (e) { /* export without audio */ }
+    const wasMuted = video.muted;
+    video.muted = false;
+    const unlock = video.play();
+    let wakeLock = null;
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').then((w) => { wakeLock = w; }).catch(() => {}); } catch (e) {}
+    state.exporting = true; cancelled = false;
+    $('export').disabled = true; $('analyze').disabled = true; $('cancel').hidden = false; $('progWrap').hidden = false; $('result').hidden = true;
+    $('prog').style.width = '0%';
+    $('exportStatus').textContent = '書き出し中…（動画の長さと同じ時間がかかります）';
+    try { await unlock; } catch (e) {}
+    video.pause();
+    video.playbackRate = 1;
+    await seekTo(0);
+
+    const stream = out.captureStream(30);
+    try {
+      if (audioCtx) await audioCtx.resume();
+      if (audioDest) audioDest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+    } catch (e) { /* export without audio */ }
+
+    const px = state.W * state.H;
+    const bps = Math.min(16e6, Math.max(3e6, px * 30 * 0.12));
+    const chunks = [];
+    try {
+      recorder = new MediaRecorder(stream, mime.m ? { mimeType: mime.m, videoBitsPerSecond: bps } : { videoBitsPerSecond: bps });
+    } catch (e) {
+      recorder = new MediaRecorder(stream);
+    }
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise((res) => (recorder.onstop = res));
+    const onEnd = () => { if (recorder.state !== 'inactive') recorder.stop(); };
+    video.addEventListener('ended', onEnd);
+    recorder.start(250);
+    try { await video.play(); } catch (e) { onEnd(); }
+    await stopped;
+    video.removeEventListener('ended', onEnd);
+    video.pause();
+    stream.getVideoTracks().forEach((t) => t.stop());
+    stream.getAudioTracks().forEach((t) => stream.removeTrack(t));
+    if (audioGain) audioGain.gain.value = 1;
+    video.muted = wasMuted;
+    try { wakeLock && wakeLock.release(); } catch (e) {}
+    state.exporting = false;
+    $('export').disabled = false; $('analyze').disabled = false; $('cancel').hidden = true; $('progWrap').hidden = true;
+
+    if (cancelled || !chunks.length) {
+      $('exportStatus').textContent = cancelled ? '書き出しを中止しました。' : '書き出しに失敗しました。もう一度お試しください。';
+      return;
+    }
+    const type = (recorder.mimeType || mime.m || 'video/webm').split(';')[0];
+    state.resultExt = type.includes('mp4') ? 'mp4' : 'webm';
+    state.resultBlob = new Blob(chunks, { type });
+    const rv = $('resultVideo');
+    if (rv.src) URL.revokeObjectURL(rv.src);
+    rv.src = URL.createObjectURL(state.resultBlob);
+    $('result').hidden = false;
+    $('saveTip').hidden = true;
+    $('exportStatus').textContent = `完了：${(state.resultBlob.size / 1048576).toFixed(1)} MB（${state.resultExt.toUpperCase()}）`;
+    if (state.resultExt !== 'mp4') {
+      $('exportStatus').textContent += ' このブラウザは MP4 で書き出せないため WebM になりました。iPhone の写真アプリには保存できません。Chrome・Safari・Edge の最新版で書き出すと MP4 になります。';
+    }
+  }
+  $('export').addEventListener('click', exportVideo);
+  $('cancel').addEventListener('click', () => { cancelled = true; if (recorder && recorder.state !== 'inactive') recorder.stop(); });
+
+  let downloads = null;
+  if (window.claude && window.claude.use) {
+    window.claude.use('downloads').then((d) => { downloads = d; }).catch(() => {});
+  }
+  const UA = navigator.userAgent;
+  const IS_IOS = /iPhone|iPad|iPod/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+  const IS_ANDROID = /Android/.test(UA);
+  if (IS_IOS || IS_ANDROID) $('save').textContent = '写真に保存';
+  function showSaveTip() {
+    const tip = $('saveTip');
+    if (IS_IOS) {
+      tip.innerHTML = '<b>写真アプリに入れるには</b><br>共有シートが出たら「ビデオを保存」を選びます。<br>シートが出ずにダウンロードされた場合は、「ファイル」アプリの「ダウンロード」で動画を開き、共有ボタン →「ビデオを保存」で写真アプリに入ります。';
+    } else if (IS_ANDROID) {
+      tip.innerHTML = '<b>写真アプリで見るには</b><br>動画は「ダウンロード」フォルダに保存されます。Google フォトなら「ライブラリ」→「デバイス内の写真」→「Download」に表示されます。';
+    } else {
+      tip.innerHTML = 'MP4 ファイルとして保存しました。スマホの写真に入れるには、AirDrop・Google ドライブ・LINE などでスマホに送ってから保存してください。';
+    }
+    tip.hidden = false;
+  }
+  // Outside claude.ai: share sheet on phones (iPhone shows "Save Video"), plain download elsewhere.
+  async function saveStandalone(blob, name) {
+    const file = new File([blob], name, { type: blob.type });
+    if ((IS_IOS || IS_ANDROID) && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return 'shared'; }
+      catch (e) { if (e && e.name === 'AbortError') return 'cancel'; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    return 'downloaded';
+  }
+  $('save').addEventListener('click', async () => {
+    if (!state.resultBlob) return;
+    if (!downloads) {
+      const r = await saveStandalone(state.resultBlob, `${state.fileName}_水平補正.${state.resultExt}`);
+      if (r === 'cancel') { $('exportStatus').textContent = '保存をキャンセルしました。'; return; }
+      $('exportStatus').textContent = '保存しました。';
+      showSaveTip();
+      return;
+    }
+    try {
+      const r = await downloads.save({ filename: `${state.fileName}_水平補正.${state.resultExt}`, data: state.resultBlob });
+      $('exportStatus').textContent = r && r.status === 'delivered' ? '送信しました。' : '保存しました。';
+      showSaveTip();
+    } catch (e) {
+      if (e && e.code === 'declined') $('exportStatus').textContent = '保存をキャンセルしました。';
+      else if (e && e.code === 'rate_limited') $('exportStatus').textContent = '保存の確認画面がすでに開いています。';
+      else if (e && e.code === 'too_large') $('exportStatus').textContent = 'ファイルが大きすぎて保存できませんでした。短く切った動画でお試しください。';
+      else $('exportStatus').textContent = 'ファイルを保存できませんでした。上の動画を長押し（パソコンは右クリック）して保存してください。';
+    }
+  });
+
+  /* ================= Start: shaky sample scene, analysed ================= */
+  setSize(1280, 720);
+  updateBadge();
+  drawDemo(0);
+  showStrength();
+  applyMode();
+  requestAnimationFrame((t) => { last = t; loop(t); });
+  setTimeout(analyzeTrack, 300);
+})();
+</script>
+
+</body>
+</html>
